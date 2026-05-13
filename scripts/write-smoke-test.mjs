@@ -135,51 +135,6 @@ try {
   // Confirm it's actually gone — wait briefly for the WAL to flush.
   await new Promise((r) => setTimeout(r, 300));
   assert(sqlite.reminder(c2.reminder.id) === null, "delete_reminder: gone from SQLite");
-
-  // === TAG OPS (v0.2.0) ===
-
-  // 10. create_reminder with tags
-  const t1 = await createReminder(sqlite, applescript, {
-    list: LIST_A,
-    title: "Smoke tags",
-    tags: ["alpha", "beta"],
-  });
-  const t1tags = new Set(t1.reminder.tags.map((s) => s.toLowerCase()));
-  assert(t1tags.has("alpha") && t1tags.has("beta"), "create_reminder: tags materialised", JSON.stringify([...t1tags]));
-  assert(t1.reminder.title.includes("#alpha") && t1.reminder.title.includes("#beta"),
-    "create_reminder: tag tokens visible in title", t1.reminder.title);
-
-  // 11. update_reminder — add a tag
-  const t2 = await updateReminder(sqlite, applescript, {
-    id: t1.reminder.id,
-    add_tags: ["gamma"],
-  });
-  const t2tags = new Set(t2.reminder.tags.map((s) => s.toLowerCase()));
-  assert(t2tags.has("alpha") && t2tags.has("beta") && t2tags.has("gamma"),
-    "update_reminder: add_tags merged with existing", JSON.stringify([...t2tags]));
-
-  // 12. update_reminder — remove a tag
-  const t3 = await updateReminder(sqlite, applescript, {
-    id: t1.reminder.id,
-    remove_tags: ["alpha"],
-  });
-  const t3tags = new Set(t3.reminder.tags.map((s) => s.toLowerCase()));
-  assert(!t3tags.has("alpha"), "update_reminder: remove_tags strips alpha");
-  assert(t3tags.has("beta") && t3tags.has("gamma"), "update_reminder: remove leaves others intact",
-    JSON.stringify([...t3tags]));
-
-  // 13. update_reminder — adding an existing tag is a no-op
-  const t4 = await updateReminder(sqlite, applescript, {
-    id: t1.reminder.id,
-    add_tags: ["gamma"],
-  });
-  const t4tags = new Set(t4.reminder.tags.map((s) => s.toLowerCase()));
-  assert(t4tags.size === t3tags.size, "update_reminder: adding existing tag is no-op",
-    `before=${[...t3tags].sort()} after=${[...t4tags].sort()}`);
-
-  // 14. Clean the tag test reminder
-  const delT = await deleteReminder(sqlite, applescript, { id: t1.reminder.id });
-  assert(delT.ok === true, "cleanup: tag reminder deleted");
 } catch (e) {
   console.log(`FAIL  unhandled error: ${e.message}`);
   failed++;

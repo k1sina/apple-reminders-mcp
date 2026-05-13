@@ -35,23 +35,18 @@ All write tools return the full updated `Reminder` object (except `delete_remind
 
 | Tool                  | What it does                                                          |
 |-----------------------|-----------------------------------------------------------------------|
-| `create_reminder`     | Creates a reminder in a named list. Supports notes, priority, due (ISO or YYYY-MM-DD), `due_all_day`, `flagged`, **`tags: string[]`** (added in 0.2.0). |
-| `update_reminder`     | Patches title / notes / priority / due / flagged. `clear_due: true` drops the date. **`add_tags` / `remove_tags`** (added in 0.2.0) toggle hashtags. |
+| `create_reminder`     | Creates a reminder in a named list. Supports notes, priority, due (ISO or YYYY-MM-DD), `due_all_day`, `flagged`. |
+| `update_reminder`     | Patches title / notes / priority / due / flagged. `clear_due: true` drops the date. |
 | `complete_reminder`   | Sets `completed=true` and stamps `completion_date`. Recurring reminders spawn the next occurrence automatically (Apple's behavior). |
 | `uncomplete_reminder` | Re-opens a completed reminder.                                       |
 | `delete_reminder`     | **Destructive.** Permanently deletes by id. Returns `{ ok, id, title }`. |
 | `move_reminder`       | Moves a reminder to a different list (by name or UUID).              |
 
-### Tag setting (v0.2.0)
+### Why tag writes aren't supported here
 
-Reminders.app extracts `#tag` tokens from a reminder's title and auto-creates `ZREMCDHASHTAG` rows in its SQLite store. The MCP exploits this:
+v0.2.0 attempted tag writes by appending `#tag` tokens to the title; v0.2.1 rolled this back because **Reminders.app's hashtag extractor runs only on user input events in the UI, not on AppleScript-set strings**. Five empirical probes against the real store (`make new reminder`, post-create `set name`, tell-style `set its name`, `set body`, plus tags-property accessors) all produced reminders whose titles contained `#tag` tokens but whose `tags[]` was empty — no `ZREMCDHASHTAG` rows were created. A direct-SQLite path is on the v0.3.0 roadmap.
 
-- `create_reminder({list, title, tags:["work","urgent"]})` → the title is rewritten to `"<title> #work #urgent"` before the write. Reminders.app then auto-extracts.
-- `update_reminder({id, add_tags:["urgent"]})` → reads the current title, appends ` #urgent` if not already there, writes it back.
-- `update_reminder({id, remove_tags:["urgent"]})` → strips `#urgent` from the title (case-insensitive, word-boundary).
-- Combined: `update_reminder({id, add_tags:["new"], remove_tags:["old"]})` removes first, then adds.
-
-**Trade-off:** tags become visible in the title text. That's exactly how a Reminders user types them by hand anyway — typing `#foo` in the app's title field is the canonical way to tag.
+For now, set tags by editing the reminder in Reminders.app directly. Read tools still see all your existing hashtags correctly.
 
 Every write logs a `[WRITE] <tool> <args>` line to stderr for auditability.
 
@@ -177,10 +172,14 @@ interface Reminder {
 ## Scope
 
 **v0.1.0:** read tools — lists, sections, reminders, subtasks, tags, notes, priority, due dates.
-**v0.2.0 (current):** write tools — basic CRUD plus **tag setting** via title-hashtag interpolation.
+**v0.2.0:** write tools — basic CRUD. (Tag-via-title-interpolation shipped but didn't actually create hashtag rows — see "Why tag writes aren't supported here" above.)
+**v0.2.1 (current):** rolled the broken tag args out so callers stop being misled.
+
+**Roadmap:**
+- **v0.3.0** — tag setting via direct SQLite writes to `ZREMCDOBJECT` (hashtag entity 32) + `ZREMCDHASHTAGLABEL`. Bypasses Reminders.app's UI-only extractor; experimental w.r.t. CloudKit sync.
 
 **Out of scope (deferred):**
-- **Subtask creation** — macOS 26's Reminders.app AppleScript dictionary doesn't expose the parent relationship at all (no `parent reminder`, no `subtasks` collection). Would need a Shortcuts bridge or direct SQLite writes that fight CloudKit.
+- **Subtask creation** — macOS 26's Reminders.app AppleScript dictionary doesn't expose the parent relationship at all (no `parent reminder`, no `subtasks` collection). Would need a Shortcuts bridge or direct SQLite writes.
 - Section assignment
 - Bulk operations
 - Recurring-rule editing

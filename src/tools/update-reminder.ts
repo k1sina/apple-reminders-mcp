@@ -2,7 +2,6 @@ import { z } from "zod";
 import { AppleScriptClient } from "../applescript-client.js";
 import type { SqliteClient } from "../sqlite-client.js";
 import type { Reminder } from "../types.js";
-import { addTagsToTitle, removeTagsFromTitle } from "./hashtags.js";
 import { PRIORITY_VALUES, parseDueInput } from "./shared.js";
 
 export const updateReminderInputShape = {
@@ -41,20 +40,6 @@ export const updateReminderInputShape = {
     .describe(
       "DESTRUCTIVE — clears the due date (sets to missing value). Cannot be combined with `due`."
     ),
-  add_tags: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "Hashtag names to add (without `#`). Appended to the title as ` #tag` for any not already " +
-      "present. Combined with `title`: tags are merged into the new title."
-    ),
-  remove_tags: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "Hashtag names to remove (without `#`). Strips `#tag` tokens from the title. " +
-      "Combined with `add_tags`: removals happen first, then additions."
-    ),
 };
 
 const inputSchema = z.object(updateReminderInputShape);
@@ -62,10 +47,10 @@ export type UpdateReminderInput = z.infer<typeof inputSchema>;
 
 export const updateReminderDescription =
   "WRITES TO APPLE REMINDERS: updates fields on an existing reminder (title, notes, priority, " +
-  "due date, flagged, tags). Pass only the fields you want changed. " +
-  "Use `add_tags` / `remove_tags` to toggle hashtags (they live as `#tag` suffixes in the title " +
-  "— Reminders.app's auto-extraction handles the rest). `clear_due: true` is destructive — do " +
-  "not call without explicit user intent. Returns the full updated Reminder.";
+  "due date, flagged). Pass only the fields you want changed. `clear_due: true` is destructive — " +
+  "do not call without explicit user intent. Returns the full updated Reminder. " +
+  "NOTE: tag setting is not supported on macOS 26 via AppleScript — the Reminders.app bridge " +
+  "does not run hashtag extraction on programmatically-set titles.";
 
 export async function updateReminder(
   sqlite: SqliteClient,
@@ -85,21 +70,8 @@ export async function updateReminder(
   const lines: string[] = [];
   let dateBlock = "";
 
-  // Resolve the effective title: caller-supplied or fall back to the existing one. We mutate it
-  // for tag changes too — even when the caller didn't pass `title`, an add/remove_tags op needs
-  // to write the modified title back.
-  const baseTitle = input.title ?? before.title;
-  const hasTagOps = (input.add_tags && input.add_tags.length > 0) ||
-                    (input.remove_tags && input.remove_tags.length > 0);
-  let nextTitle = baseTitle;
-  if (input.remove_tags && input.remove_tags.length > 0) {
-    nextTitle = removeTagsFromTitle(nextTitle, input.remove_tags);
-  }
-  if (input.add_tags && input.add_tags.length > 0) {
-    nextTitle = addTagsToTitle(nextTitle, input.add_tags);
-  }
-  if (input.title !== undefined || (hasTagOps && nextTitle !== before.title)) {
-    lines.push(`set name of R to ${AppleScriptClient.escape(nextTitle)}`);
+  if (input.title !== undefined) {
+    lines.push(`set name of R to ${AppleScriptClient.escape(input.title)}`);
   }
   if (input.notes !== undefined) {
     lines.push(`set body of R to ${AppleScriptClient.escape(input.notes)}`);
@@ -138,11 +110,7 @@ end tell`;
 
   await applescript.run(script);
 
-  // When tags changed, wait for the hashtag-extraction side-effect to land.
-  const expectedTagPresence = input.add_tags ?? [];
-  const after = expectedTagPresence.length > 0
-    ? await sqlite.reminderWithTagWait(input.id, expectedTagPresence)
-    : await sqlite.reminderWithRetry(input.id);
+  const after = await sqlite.reminderWithRetry(input.id);
   if (!after) throw new Error(`Updated reminder ${input.id} but SQLite hasn't seen the commit yet.`);
   return { reminder: after };
 }

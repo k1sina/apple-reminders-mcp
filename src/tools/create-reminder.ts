@@ -2,7 +2,6 @@ import { z } from "zod";
 import { AppleScriptClient } from "../applescript-client.js";
 import type { SqliteClient } from "../sqlite-client.js";
 import type { Reminder } from "../types.js";
-import { addTagsToTitle } from "./hashtags.js";
 import { PRIORITY_VALUES, parseDueInput } from "./shared.js";
 
 export const createReminderInputShape = {
@@ -37,22 +36,17 @@ export const createReminderInputShape = {
     .boolean()
     .optional()
     .describe("Mark the reminder as flagged."),
-  tags: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "Hashtag names (without `#`). Each is appended to the title as ` #tag` if not already " +
-      "present. Reminders.app auto-extracts them into proper hashtag rows."
-    ),
 };
 
 const inputSchema = z.object(createReminderInputShape);
 export type CreateReminderInput = z.infer<typeof inputSchema>;
 
 export const createReminderDescription =
-  "WRITES TO APPLE REMINDERS: creates a new reminder in the given list. Pass `tags` to apply " +
-  "hashtags (they become visible as `#tag` suffixes in the title — Reminders.app's normal " +
-  "behavior). Returns the full Reminder object. Do not call without explicit user intent.";
+  "WRITES TO APPLE REMINDERS: creates a new reminder in the given list. Returns the full Reminder " +
+  "object. Do not call without explicit user intent. " +
+  "NOTE: tag setting is not supported via this tool on macOS 26 — Reminders.app's AppleScript " +
+  "bridge does not run hashtag extraction on programmatically-set titles. Set tags by editing the " +
+  "reminder in Reminders.app directly.";
 
 export async function createReminder(
   sqlite: SqliteClient,
@@ -67,14 +61,8 @@ export async function createReminder(
     throw new Error(`List '${input.list}' not found. Known lists: ${known || "(none)"}`);
   }
 
-  // Apply tags by interpolating them into the title — Reminders.app extracts `#token`
-  // patterns on save into ZREMCDHASHTAG rows.
-  const titleWithTags = input.tags && input.tags.length > 0
-    ? addTagsToTitle(input.title, input.tags)
-    : input.title;
-
   // Build the `with properties { ... }` clause.
-  const props: string[] = [`name:${AppleScriptClient.escape(titleWithTags)}`];
+  const props: string[] = [`name:${AppleScriptClient.escape(input.title)}`];
   if (input.notes !== undefined && input.notes !== "") {
     props.push(`body:${AppleScriptClient.escape(input.notes)}`);
   }
@@ -106,10 +94,7 @@ end tell`;
   const newId = await applescript.run(script);
   const uuid = AppleScriptClient.uuidFromReminderId(newId);
 
-  // If tags were requested, give Reminders.app a moment to materialise its hashtag rows.
-  const reminder = input.tags && input.tags.length > 0
-    ? await sqlite.reminderWithTagWait(uuid, input.tags)
-    : await sqlite.reminderWithRetry(uuid);
+  const reminder = await sqlite.reminderWithRetry(uuid);
   if (!reminder) {
     throw new Error(
       `Created reminder ${uuid} but SQLite hasn't seen it yet. ` +
