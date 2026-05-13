@@ -35,12 +35,23 @@ All write tools return the full updated `Reminder` object (except `delete_remind
 
 | Tool                  | What it does                                                          |
 |-----------------------|-----------------------------------------------------------------------|
-| `create_reminder`     | Creates a reminder in a named list. Supports notes, priority, due (ISO or YYYY-MM-DD), `due_all_day`, `flagged`. |
-| `update_reminder`     | Patches title / notes / priority / due / flagged. `clear_due: true` drops the date. |
+| `create_reminder`     | Creates a reminder in a named list. Supports notes, priority, due (ISO or YYYY-MM-DD), `due_all_day`, `flagged`, **`tags: string[]`** (added in 0.2.0). |
+| `update_reminder`     | Patches title / notes / priority / due / flagged. `clear_due: true` drops the date. **`add_tags` / `remove_tags`** (added in 0.2.0) toggle hashtags. |
 | `complete_reminder`   | Sets `completed=true` and stamps `completion_date`. Recurring reminders spawn the next occurrence automatically (Apple's behavior). |
 | `uncomplete_reminder` | Re-opens a completed reminder.                                       |
 | `delete_reminder`     | **Destructive.** Permanently deletes by id. Returns `{ ok, id, title }`. |
 | `move_reminder`       | Moves a reminder to a different list (by name or UUID).              |
+
+### Tag setting (v0.2.0)
+
+Reminders.app extracts `#tag` tokens from a reminder's title and auto-creates `ZREMCDHASHTAG` rows in its SQLite store. The MCP exploits this:
+
+- `create_reminder({list, title, tags:["work","urgent"]})` → the title is rewritten to `"<title> #work #urgent"` before the write. Reminders.app then auto-extracts.
+- `update_reminder({id, add_tags:["urgent"]})` → reads the current title, appends ` #urgent` if not already there, writes it back.
+- `update_reminder({id, remove_tags:["urgent"]})` → strips `#urgent` from the title (case-insensitive, word-boundary).
+- Combined: `update_reminder({id, add_tags:["new"], remove_tags:["old"]})` removes first, then adds.
+
+**Trade-off:** tags become visible in the title text. That's exactly how a Reminders user types them by hand anyway — typing `#foo` in the app's title field is the canonical way to tag.
 
 Every write logs a `[WRITE] <tool> <args>` line to stderr for auditability.
 
@@ -99,10 +110,13 @@ Add to `~/.claude.json` — same shape as above.
 ## Sanity checks
 
 ```sh
+# Hashtag pure-function unit tests (no Reminders.app needed)
+node dist/tools/hashtags.js --test
+
 # Read smoke: scans your live store, prints summary
 npm run smoke
 
-# Write smoke: creates throwaway lists, exercises every write op, deletes them
+# Write smoke: creates throwaway lists, exercises every write op + tags, deletes them
 npm run smoke:write
 
 # Boot the MCP (Ctrl-C; you should see "Listening on stdio.")
@@ -162,15 +176,15 @@ interface Reminder {
 
 ## Scope
 
-**v1 (shipped):** read tools — lists, sections, reminders, subtasks, tags, notes, priority, due dates.
-**v2 (shipped):** write tools — basic CRUD (create/update/complete/uncomplete/delete/move).
+**v0.1.0:** read tools — lists, sections, reminders, subtasks, tags, notes, priority, due dates.
+**v0.2.0 (current):** write tools — basic CRUD plus **tag setting** via title-hashtag interpolation.
 
 **Out of scope (deferred):**
-- Tag setting (via title-hashtag interpolation)
-- Subtask creation
+- **Subtask creation** — macOS 26's Reminders.app AppleScript dictionary doesn't expose the parent relationship at all (no `parent reminder`, no `subtasks` collection). Would need a Shortcuts bridge or direct SQLite writes that fight CloudKit.
 - Section assignment
 - Bulk operations
 - Recurring-rule editing
+- Tag rename (across every reminder using a label)
 
 ## Architecture notes
 

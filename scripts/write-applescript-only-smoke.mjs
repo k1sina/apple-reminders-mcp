@@ -3,6 +3,7 @@
 // Verifies the AppleScript flow even when the running terminal lacks Full Disk Access.
 
 import { AppleScriptClient } from "../dist/applescript-client.js";
+import { addTagsToTitle, removeTagsFromTitle, extractTags } from "../dist/tools/hashtags.js";
 
 const ascr = new AppleScriptClient(process.env.DEBUG === "1");
 
@@ -93,6 +94,39 @@ end tell`);
   delete R
 end tell`);
   check(!(await reminderExists(uuid, LIST_B)), "delete: reminder is gone");
+
+  // === Tag-write via title interpolation (v0.2.0) ===
+  // We can't verify Reminders.app's hashtag-row extraction without SQLite, but we can verify the
+  // title-manipulation path: write a title with #tag tokens via AppleScript, read it back, confirm
+  // the tokens are present where we put them.
+  const tagTitle = addTagsToTitle("Smoke tags base", ["alpha", "beta"]);
+  check(extractTags(tagTitle).sort().join(",") === "alpha,beta", "addTagsToTitle: pre-write check");
+
+  const tagId = AppleScriptClient.uuidFromReminderId(await ascr.run(`tell application "Reminders"
+  set L to first list whose name is ${AppleScriptClient.escape(LIST_A)}
+  set R to make new reminder at end of L with properties {name:${AppleScriptClient.escape(tagTitle)}}
+  return id of R as text
+end tell`));
+  const tagTitleRead = await getProp(tagId, "name", LIST_A);
+  check(tagTitleRead === tagTitle, "tag-write: title round-trip via Reminders.app", tagTitleRead);
+  check(extractTags(tagTitleRead).includes("alpha") && extractTags(tagTitleRead).includes("beta"),
+    "tag-write: hashtag tokens survived round-trip");
+
+  // remove one tag, write back, verify
+  const stripped = removeTagsFromTitle(tagTitleRead, ["alpha"]);
+  await ascr.run(`tell application "Reminders"
+  ${AppleScriptClient.resolveReminderBlock(tagId, LIST_A)}
+  set name of R to ${AppleScriptClient.escape(stripped)}
+end tell`);
+  const after = await getProp(tagId, "name", LIST_A);
+  check(!extractTags(after).includes("alpha") && extractTags(after).includes("beta"),
+    "tag-write: remove alpha keeps beta", after);
+
+  // cleanup the tag reminder
+  await ascr.run(`tell application "Reminders"
+  ${AppleScriptClient.resolveReminderBlock(tagId, LIST_A)}
+  delete R
+end tell`);
 } catch (e) {
   console.log(`FAIL  unhandled: ${e.message}`);
   fail++;

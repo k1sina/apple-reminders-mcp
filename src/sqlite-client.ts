@@ -319,6 +319,34 @@ export class SqliteClient {
     return null;
   }
 
+  /**
+   * Poll until the reminder's hashtag rows have caught up. Reminders.app extracts `#tag` tokens
+   * from a freshly-set title asynchronously; this helper gives that extraction up to ~1.5 s
+   * before we return a reminder whose `tags` array still looks stale.
+   *
+   * `expectedTags` and the reminder's `tags` are compared case-insensitively. Tags the caller
+   * didn't ask about are ignored. If we time out we still return the latest reminder so the
+   * caller can return SOMETHING — Reminders.app will catch up on the next read.
+   */
+  async reminderWithTagWait(
+    uuid: string,
+    expectedTags: string[],
+    attempts = 15,
+    delayMs = 100
+  ): Promise<Reminder | null> {
+    const expected = new Set(expectedTags.map((t) => t.toLowerCase()));
+    let last: Reminder | null = null;
+    for (let i = 0; i < attempts; i++) {
+      last = this.reminder(uuid);
+      if (last) {
+        const present = new Set(last.tags.map((t) => t.toLowerCase()));
+        if ([...expected].every((t) => present.has(t))) return last;
+      }
+      if (i + 1 < attempts) await new Promise((res) => setTimeout(res, delayMs));
+    }
+    return last;
+  }
+
   /** Look up a list by exact UUID or case-insensitive name. Returns null if not found. */
   findListByNameOrUuid(query: string): List | null {
     const lists = this.lists();
