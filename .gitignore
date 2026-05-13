@@ -1,0 +1,11 @@
+node_modules
+dist
+.DS_Store
+*.log
+helper/.build
+helper/Package.resolved
+
+# Build artifacts — the Swift helper is kept as source-only; binaries are not
+# committed. Build locally with `cd helper && swift build -c release`.
+bin/remindersd
+bin/RemindersHelper.app/

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.k1sina.remindersd</string>
+    <key>CFBundleName</key>
+    <string>remindersd</string>
+    <key>CFBundleExecutable</key>
+    <string>remindersd</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>apple-reminders-mcp reads your Reminders so Claude can list, search, and inspect them on your behalf.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>apple-reminders-mcp reads your Reminders (including subtasks and notes) so Claude can list, search, and inspect them on your behalf.</string>
+</dict>
+</plist>

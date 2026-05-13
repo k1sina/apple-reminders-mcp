@@ -1,0 +1,50 @@
+{
+  "name": "apple-reminders-mcp",
+  "version": "0.1.0",
+  "description": "Read-only MCP server for Apple Reminders. Exposes lists, sections, reminders, subtasks, tags, notes, priority, and due dates via EventKit (Swift helper) + SQLite fallback.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "apple-reminders-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "smoke": "node scripts/smoke-test.mjs",
+    "smoke:write": "node scripts/write-applescript-only-smoke.mjs",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "apple-reminders",
+    "reminders",
+    "eventkit",
+    "claude",
+    "anthropic",
+    "stdio"
+  ],
+  "author": "k1sina",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^11.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
