@@ -35,26 +35,35 @@ All write tools return the full updated `Reminder` object (except `delete_remind
 
 | Tool                  | What it does                                                          |
 |-----------------------|-----------------------------------------------------------------------|
-| `create_reminder`     | Creates a reminder in a named list. Supports notes, priority, due (ISO or YYYY-MM-DD), `due_all_day`, `flagged`. |
-| `update_reminder`     | Patches title / notes / priority / due / flagged. `clear_due: true` drops the date. |
+| `create_reminder`     | Creates a reminder in a named list. Supports notes, priority, due (ISO or YYYY-MM-DD), `due_all_day`, `flagged`, **`tags`** (v0.3.0 — Shortcuts-based). |
+| `update_reminder`     | Patches title / notes / priority / due / flagged. `clear_due: true` drops the date. **`add_tags` / `remove_tags`** (v0.3.0 — Shortcuts-based). |
 | `complete_reminder`   | Sets `completed=true` and stamps `completion_date`. Recurring reminders spawn the next occurrence automatically (Apple's behavior). |
 | `uncomplete_reminder` | Re-opens a completed reminder.                                       |
 | `delete_reminder`     | **Destructive.** Permanently deletes by id. Returns `{ ok, id, title }`. |
 | `move_reminder`       | Moves a reminder to a different list (by name or UUID).              |
+| `set_tags`            | Adds and/or removes hashtags via the Shortcut. v0.3.0. See SHORTCUT_SETUP.md. |
 
-### Why tag writes aren't supported (macOS 26: hard wall)
+### Tag writes (v0.3.0): via Apple Shortcuts
 
-**Tag setting from anything other than Reminders.app's own UI is not possible on macOS 26.** Read access is unaffected — every existing hashtag still shows up correctly in `list_tags`, `list_reminders(tags: [...])`, etc.
+Tag writes from outside Reminders.app are **not** possible via AppleScript (the extractor only runs on UI input) or direct SQLite (Reminders.app's CoreData layer never re-reads the store at runtime) on macOS 26. Both paths were probed end-to-end — see "Investigation history" below.
 
-Two paths were investigated and both fail:
+The MCP routes tag writes through a user-authored **Apple Shortcut** that calls Apple's first-party "Add Tag to Reminder" / "Remove Tag from Reminder" actions. Those actions go through Reminders.app's CoreData stack and produce real hashtag rows that appear in the UI and sync to iCloud.
 
-1. **AppleScript title interpolation** (attempted in v0.2.0, rolled back in v0.2.1). Reminders.app's hashtag extractor only runs on UI input events, not on AppleScript-set strings. Five probe variants — `make new reminder` with `#tag` in the name, post-create `set name`, tell-style `set its name to`, `set body`, plus direct `tags` / `hashtags` property accessors — all produced reminders whose titles visibly contained `#tag` tokens but whose `ZREMCDHASHTAG` rows were never created.
+**One-time setup:** follow [SHORTCUT_SETUP.md](./SHORTCUT_SETUP.md) to build a Shortcut named `Claude Reminder Tags`. Takes ~5 minutes.
 
-2. **Direct SQLite INSERT into `ZREMCDOBJECT` entity-32** (investigated for v0.3.0, abandoned). The row inserts cleanly and any direct SQLite reader (including this MCP) sees the tag. But Reminders.app's UI doesn't refresh — it uses a CoreData `NSManagedObjectContext` that caches relationships in memory and never re-reads the store at runtime. Three "poke" variants to force a CoreData refetch (re-save body, toggle flagged, re-set name to itself) all left the UI unchanged. The same wall applies to `cloudd` (CloudKit sync), so phantom tags don't propagate to your iPhone either.
+The MCP detects the Shortcut's presence at startup:
+- If present → tag args on `create_reminder` / `update_reminder` / `set_tags` work.
+- If absent → those tools fail with a clear error pointing at SHORTCUT_SETUP.md. Everything else (read tools, AppleScript writes) keeps working.
 
-The only practical path that would work is the **Apple Shortcuts bridge** — Apple's first-party action goes through CoreData properly. That requires a one-time user-authored Shortcut and isn't planned. If Apple ever exposes hashtag setting to AppleScript / EventKit, support will land in a future version.
+### Investigation history
 
-The investigation scripts are preserved under `scripts/v3-tag-feasibility-probe*.mjs` for anyone retracing the findings.
+The reason this needs a Shortcut at all:
+
+1. **AppleScript title interpolation** (v0.2.0, rolled back in v0.2.1). Reminders.app's hashtag extractor runs only on UI input events. Five probe variants (`make new reminder` with `#tag` in name, post-create `set name`, tell-style `set its name`, `set body`, plus direct `tags` / `hashtags` accessors) all produced reminders whose titles contained `#tag` tokens but whose `ZREMCDHASHTAG` rows were never created.
+
+2. **Direct SQLite INSERT into `ZREMCDOBJECT` entity-32** (probed before v0.3.0, abandoned). The row inserts cleanly and any external SQLite reader sees the tag, but Reminders.app's UI never refreshes — its `NSManagedObjectContext` caches relationships in memory. Three "poke" variants to force a CoreData refetch (re-save body, toggle flagged, re-set name to itself) all left the UI unchanged. Same wall blocks `cloudd` from pushing the row to iCloud.
+
+Probe scripts are preserved under `scripts/v3-tag-feasibility-probe*.mjs`.
 
 Every write logs a `[WRITE] <tool> <args>` line to stderr for auditability.
 
@@ -179,10 +188,10 @@ interface Reminder {
 - **v0.1.0** — read tools (lists, sections, reminders, subtasks, tags, notes, priority, due dates).
 - **v0.2.0** — write tools (basic CRUD). Shipped a tag-via-title-interpolation experiment that turned out not to create real hashtag rows.
 - **v0.2.1** — rolled the broken tag args out.
-- **v0.2.2 (current)** — documents the macOS 26 hard wall on programmatic tag writes; removes dead code from the rolled-back experiment. v0.3.0 was investigated and closed as won't-fix; see "Why tag writes aren't supported" above.
+- **v0.2.2** — documents the macOS 26 wall on AppleScript / SQLite tag writes; removes dead code.
+- **v0.3.0 (current)** — tag writes restored, routed through a user-authored Apple Shortcut. New `set_tags` tool. `tags` / `add_tags` / `remove_tags` args back on `create_reminder` / `update_reminder`.
 
 **Out of scope on macOS 26 (Reminders.app dictionary doesn't expose them):**
-- Tag setting
 - Subtask creation (no `parent reminder` or `subtasks` collection)
 - Section assignment
 - Recurring-rule editing

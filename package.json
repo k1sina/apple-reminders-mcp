@@ -1,6 +1,6 @@
 {
   "name": "apple-reminders-mcp",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Read-only MCP server for Apple Reminders. Exposes lists, sections, reminders, subtasks, tags, notes, priority, and due dates via EventKit (Swift helper) + SQLite fallback.",
   "type": "module",
   "main": "dist/index.js",

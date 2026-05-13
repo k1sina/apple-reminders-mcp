@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { AppleScriptClient } from "./applescript-client.js";
+import { ShortcutsClient } from "./shortcuts-client.js";
 import { SqliteClient } from "./sqlite-client.js";
 import {
   listLists,
@@ -58,6 +59,11 @@ import {
   moveReminderDescription,
   moveReminderInputShape,
 } from "./tools/move-reminder.js";
+import {
+  setTags,
+  setTagsDescription,
+  setTagsInputShape,
+} from "./tools/set-tags.js";
 
 async function main(): Promise<void> {
   let sqlite: SqliteClient;
@@ -76,10 +82,24 @@ async function main(): Promise<void> {
   );
 
   const applescript = new AppleScriptClient(process.env.DEBUG === "1");
+  const shortcuts = new ShortcutsClient();
+
+  // Startup: probe the tag Shortcut. Missing-Shortcut is non-fatal — read tools and AppleScript
+  // writes continue to work, only tag args become unavailable until SHORTCUT_SETUP.md is followed.
+  const shortcutAvailable = await shortcuts.isAvailable();
+  if (shortcutAvailable) {
+    console.error(`[apple-reminders-mcp] Tag Shortcut "${shortcuts.shortcutName}" detected — tag writes enabled.`);
+  } else {
+    console.error(
+      `[apple-reminders-mcp] Tag Shortcut "${shortcuts.shortcutName}" not found. ` +
+      `Tag args on create_reminder / update_reminder / set_tags will fail. ` +
+      `Follow SHORTCUT_SETUP.md to enable (one-time, ~5 min).`
+    );
+  }
 
   const server = new McpServer({
     name: "apple-reminders-mcp",
-    version: "0.2.2",
+    version: "0.3.0",
   });
 
   function ok<T>(data: T) {
@@ -149,13 +169,19 @@ async function main(): Promise<void> {
   server.registerTool(
     "create_reminder",
     { description: createReminderDescription, inputSchema: createReminderInputShape },
-    async (input) => ok(await createReminder(sqlite, applescript, input))
+    async (input) => ok(await createReminder(sqlite, applescript, shortcuts, input))
   );
 
   server.registerTool(
     "update_reminder",
     { description: updateReminderDescription, inputSchema: updateReminderInputShape },
-    async (input) => ok(await updateReminder(sqlite, applescript, input))
+    async (input) => ok(await updateReminder(sqlite, applescript, shortcuts, input))
+  );
+
+  server.registerTool(
+    "set_tags",
+    { description: setTagsDescription, inputSchema: setTagsInputShape },
+    async (input) => ok(await setTags(sqlite, shortcuts, input))
   );
 
   server.registerTool(

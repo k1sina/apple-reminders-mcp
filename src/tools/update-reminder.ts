@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { AppleScriptClient } from "../applescript-client.js";
+import type { ShortcutsClient } from "../shortcuts-client.js";
+import { ShortcutsError } from "../shortcuts-client.js";
 import type { SqliteClient } from "../sqlite-client.js";
 import type { Reminder } from "../types.js";
 import { PRIORITY_VALUES, parseDueInput } from "./shared.js";
@@ -40,6 +42,21 @@ export const updateReminderInputShape = {
     .describe(
       "DESTRUCTIVE — clears the due date (sets to missing value). Cannot be combined with `due`."
     ),
+  add_tags: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Hashtag names to add (without `#`). Applied via the `Claude Reminder Tags` Apple Shortcut. " +
+      "Requires the Shortcut to be installed (see SHORTCUT_SETUP.md)."
+    ),
+  remove_tags: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Hashtag names to remove (without `#`). Applied via the same Shortcut as add_tags. " +
+      "Same tag in both add_tags and remove_tags resolves as: removes happen first, then adds " +
+      "(so the tag ends up added)."
+    ),
 };
 
 const inputSchema = z.object(updateReminderInputShape);
@@ -47,14 +64,14 @@ export type UpdateReminderInput = z.infer<typeof inputSchema>;
 
 export const updateReminderDescription =
   "WRITES TO APPLE REMINDERS: updates fields on an existing reminder (title, notes, priority, " +
-  "due date, flagged). Pass only the fields you want changed. `clear_due: true` is destructive — " +
+  "due date, flagged, tags). Pass only the fields you want changed. `clear_due: true` is destructive — " +
   "do not call without explicit user intent. Returns the full updated Reminder. " +
-  "NOTE: tag setting is not supported on macOS 26 via AppleScript — the Reminders.app bridge " +
-  "does not run hashtag extraction on programmatically-set titles.";
+  "Tag changes (`add_tags`/`remove_tags`) route through an Apple Shortcut — see SHORTCUT_SETUP.md.";
 
 export async function updateReminder(
   sqlite: SqliteClient,
   applescript: AppleScriptClient,
+  shortcuts: ShortcutsClient,
   input: UpdateReminderInput
 ): Promise<{ reminder: Reminder }> {
   console.error(`[WRITE] update_reminder ${JSON.stringify({ id: input.id, keys: Object.keys(input).filter((k) => k !== "id") })}`);
@@ -96,21 +113,42 @@ export async function updateReminder(
     lines.push(`set ${prop} of R to d`);
   }
 
-  if (lines.length === 0) {
-    // No-op — just return the current state.
-    return { reminder: before };
-  }
+  const addTags = (input.add_tags ?? []).filter((t) => t.trim().length > 0);
+  const removeTags = (input.remove_tags ?? []).filter((t) => t.trim().length > 0);
+  const hasTagChanges = addTags.length > 0 || removeTags.length > 0;
 
-  const resolveBlock = AppleScriptClient.resolveReminderBlock(input.id, before.list_name || undefined);
-  const script = `${dateBlock}tell application "Reminders"
+  // AppleScript side first (title/notes/priority/due/flagged).
+  if (lines.length > 0) {
+    const resolveBlock = AppleScriptClient.resolveReminderBlock(input.id, before.list_name || undefined);
+    const script = `${dateBlock}tell application "Reminders"
   ${resolveBlock}
   ${lines.join("\n  ")}
   return id of R as text
 end tell`;
+    await applescript.run(script);
+  } else if (!hasTagChanges) {
+    // Nothing at all to do — return current state.
+    return { reminder: before };
+  }
 
-  await applescript.run(script);
+  // Tag changes via the Shortcut (separate pipeline).
+  if (hasTagChanges) {
+    try {
+      await shortcuts.setTags(input.id, addTags, removeTags);
+    } catch (err) {
+      const reason = err instanceof ShortcutsError
+        ? `${err.message}${err.hint ? `\nHint: ${err.hint}` : ""}`
+        : err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Tag change on reminder ${input.id} failed: ${reason}\n` +
+        `Other updates (title/notes/etc.) already applied.`
+      );
+    }
+  }
 
-  const after = await sqlite.reminderWithRetry(input.id);
+  const after = hasTagChanges
+    ? await sqlite.reminderWithTagWait(input.id, addTags, removeTags)
+    : await sqlite.reminderWithRetry(input.id);
   if (!after) throw new Error(`Updated reminder ${input.id} but SQLite hasn't seen the commit yet.`);
   return { reminder: after };
 }

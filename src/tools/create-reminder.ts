@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { AppleScriptClient } from "../applescript-client.js";
+import type { ShortcutsClient } from "../shortcuts-client.js";
+import { ShortcutsError } from "../shortcuts-client.js";
 import type { SqliteClient } from "../sqlite-client.js";
 import type { Reminder } from "../types.js";
 import { PRIORITY_VALUES, parseDueInput } from "./shared.js";
@@ -36,6 +38,14 @@ export const createReminderInputShape = {
     .boolean()
     .optional()
     .describe("Mark the reminder as flagged."),
+  tags: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Hashtag names (without `#`). Applied via the `Claude Reminder Tags` Apple Shortcut after " +
+      "the reminder is created. Requires the Shortcut to be set up (see SHORTCUT_SETUP.md). " +
+      "Tags are real hashtag rows — they appear in the UI and sync to iCloud."
+    ),
 };
 
 const inputSchema = z.object(createReminderInputShape);
@@ -44,13 +54,12 @@ export type CreateReminderInput = z.infer<typeof inputSchema>;
 export const createReminderDescription =
   "WRITES TO APPLE REMINDERS: creates a new reminder in the given list. Returns the full Reminder " +
   "object. Do not call without explicit user intent. " +
-  "NOTE: tag setting is not supported via this tool on macOS 26 — Reminders.app's AppleScript " +
-  "bridge does not run hashtag extraction on programmatically-set titles. Set tags by editing the " +
-  "reminder in Reminders.app directly.";
+  "Pass `tags` to apply hashtags (requires the `Claude Reminder Tags` Shortcut — see SHORTCUT_SETUP.md).";
 
 export async function createReminder(
   sqlite: SqliteClient,
   applescript: AppleScriptClient,
+  shortcuts: ShortcutsClient,
   input: CreateReminderInput
 ): Promise<{ reminder: Reminder }> {
   console.error(`[WRITE] create_reminder ${JSON.stringify({ list: input.list, title: input.title })}`);
@@ -94,7 +103,25 @@ end tell`;
   const newId = await applescript.run(script);
   const uuid = AppleScriptClient.uuidFromReminderId(newId);
 
-  const reminder = await sqlite.reminderWithRetry(uuid);
+  // Apply tags via the Shortcut, if any.
+  const tagsToApply = (input.tags ?? []).filter((t) => t.trim().length > 0);
+  if (tagsToApply.length > 0) {
+    try {
+      await shortcuts.setTags(uuid, tagsToApply, []);
+    } catch (err) {
+      const reason = err instanceof ShortcutsError
+        ? `${err.message}${err.hint ? `\nHint: ${err.hint}` : ""}`
+        : err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Reminder ${uuid} was created but tag application failed: ${reason}\n` +
+        `The reminder itself is in place — call get_reminder to inspect, or update_reminder({add_tags:...}) to retry.`
+      );
+    }
+  }
+
+  const reminder = tagsToApply.length > 0
+    ? await sqlite.reminderWithTagWait(uuid, tagsToApply)
+    : await sqlite.reminderWithRetry(uuid);
   if (!reminder) {
     throw new Error(
       `Created reminder ${uuid} but SQLite hasn't seen it yet. ` +

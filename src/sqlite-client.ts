@@ -319,6 +319,41 @@ export class SqliteClient {
     return null;
   }
 
+  /**
+   * After a Shortcut runs Apple's "Add Tag" / "Remove Tag" actions, the change goes through
+   * Reminders.app's CoreData stack synchronously, but the SQLite WAL may take a tick to settle.
+   * Poll up to ~3 s for the expected tag membership to materialize.
+   *
+   * `expectedAdds` and `expectedRemoves` are matched case-insensitively against the reminder's
+   * current `tags`. We return as soon as both conditions hold:
+   *   - every tag in `expectedAdds` is present
+   *   - no tag in `expectedRemoves` is present
+   *
+   * If we time out we still return the latest reminder so the caller has something to show.
+   */
+  async reminderWithTagWait(
+    uuid: string,
+    expectedAdds: string[],
+    expectedRemoves: string[] = [],
+    attempts = 30,
+    delayMs = 100
+  ): Promise<Reminder | null> {
+    const adds = new Set(expectedAdds.map((t) => t.toLowerCase()));
+    const removes = new Set(expectedRemoves.map((t) => t.toLowerCase()));
+    let last: Reminder | null = null;
+    for (let i = 0; i < attempts; i++) {
+      last = this.reminder(uuid);
+      if (last) {
+        const have = new Set(last.tags.map((t) => t.toLowerCase()));
+        const addsOk = [...adds].every((t) => have.has(t));
+        const removesOk = [...removes].every((t) => !have.has(t));
+        if (addsOk && removesOk) return last;
+      }
+      if (i + 1 < attempts) await new Promise((res) => setTimeout(res, delayMs));
+    }
+    return last;
+  }
+
   /** Look up a list by exact UUID or case-insensitive name. Returns null if not found. */
   findListByNameOrUuid(query: string): List | null {
     const lists = this.lists();
