@@ -79,7 +79,7 @@ async function main(): Promise<void> {
 
   const server = new McpServer({
     name: "apple-reminders-mcp",
-    version: "0.2.1",
+    version: "0.2.2",
   });
 
   function ok<T>(data: T) {

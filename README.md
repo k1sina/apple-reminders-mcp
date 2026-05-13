@@ -42,11 +42,19 @@ All write tools return the full updated `Reminder` object (except `delete_remind
 | `delete_reminder`     | **Destructive.** Permanently deletes by id. Returns `{ ok, id, title }`. |
 | `move_reminder`       | Moves a reminder to a different list (by name or UUID).              |
 
-### Why tag writes aren't supported here
+### Why tag writes aren't supported (macOS 26: hard wall)
 
-v0.2.0 attempted tag writes by appending `#tag` tokens to the title; v0.2.1 rolled this back because **Reminders.app's hashtag extractor runs only on user input events in the UI, not on AppleScript-set strings**. Five empirical probes against the real store (`make new reminder`, post-create `set name`, tell-style `set its name`, `set body`, plus tags-property accessors) all produced reminders whose titles contained `#tag` tokens but whose `tags[]` was empty — no `ZREMCDHASHTAG` rows were created. A direct-SQLite path is on the v0.3.0 roadmap.
+**Tag setting from anything other than Reminders.app's own UI is not possible on macOS 26.** Read access is unaffected — every existing hashtag still shows up correctly in `list_tags`, `list_reminders(tags: [...])`, etc.
 
-For now, set tags by editing the reminder in Reminders.app directly. Read tools still see all your existing hashtags correctly.
+Two paths were investigated and both fail:
+
+1. **AppleScript title interpolation** (attempted in v0.2.0, rolled back in v0.2.1). Reminders.app's hashtag extractor only runs on UI input events, not on AppleScript-set strings. Five probe variants — `make new reminder` with `#tag` in the name, post-create `set name`, tell-style `set its name to`, `set body`, plus direct `tags` / `hashtags` property accessors — all produced reminders whose titles visibly contained `#tag` tokens but whose `ZREMCDHASHTAG` rows were never created.
+
+2. **Direct SQLite INSERT into `ZREMCDOBJECT` entity-32** (investigated for v0.3.0, abandoned). The row inserts cleanly and any direct SQLite reader (including this MCP) sees the tag. But Reminders.app's UI doesn't refresh — it uses a CoreData `NSManagedObjectContext` that caches relationships in memory and never re-reads the store at runtime. Three "poke" variants to force a CoreData refetch (re-save body, toggle flagged, re-set name to itself) all left the UI unchanged. The same wall applies to `cloudd` (CloudKit sync), so phantom tags don't propagate to your iPhone either.
+
+The only practical path that would work is the **Apple Shortcuts bridge** — Apple's first-party action goes through CoreData properly. That requires a one-time user-authored Shortcut and isn't planned. If Apple ever exposes hashtag setting to AppleScript / EventKit, support will land in a future version.
+
+The investigation scripts are preserved under `scripts/v3-tag-feasibility-probe*.mjs` for anyone retracing the findings.
 
 Every write logs a `[WRITE] <tool> <args>` line to stderr for auditability.
 
@@ -105,13 +113,10 @@ Add to `~/.claude.json` — same shape as above.
 ## Sanity checks
 
 ```sh
-# Hashtag pure-function unit tests (no Reminders.app needed)
-node dist/tools/hashtags.js --test
-
 # Read smoke: scans your live store, prints summary
 npm run smoke
 
-# Write smoke: creates throwaway lists, exercises every write op + tags, deletes them
+# Write smoke: creates throwaway lists, exercises every write op, deletes them
 npm run smoke:write
 
 # Boot the MCP (Ctrl-C; you should see "Listening on stdio.")
@@ -171,19 +176,20 @@ interface Reminder {
 
 ## Scope
 
-**v0.1.0:** read tools — lists, sections, reminders, subtasks, tags, notes, priority, due dates.
-**v0.2.0:** write tools — basic CRUD. (Tag-via-title-interpolation shipped but didn't actually create hashtag rows — see "Why tag writes aren't supported here" above.)
-**v0.2.1 (current):** rolled the broken tag args out so callers stop being misled.
+- **v0.1.0** — read tools (lists, sections, reminders, subtasks, tags, notes, priority, due dates).
+- **v0.2.0** — write tools (basic CRUD). Shipped a tag-via-title-interpolation experiment that turned out not to create real hashtag rows.
+- **v0.2.1** — rolled the broken tag args out.
+- **v0.2.2 (current)** — documents the macOS 26 hard wall on programmatic tag writes; removes dead code from the rolled-back experiment. v0.3.0 was investigated and closed as won't-fix; see "Why tag writes aren't supported" above.
 
-**Roadmap:**
-- **v0.3.0** — tag setting via direct SQLite writes to `ZREMCDOBJECT` (hashtag entity 32) + `ZREMCDHASHTAGLABEL`. Bypasses Reminders.app's UI-only extractor; experimental w.r.t. CloudKit sync.
-
-**Out of scope (deferred):**
-- **Subtask creation** — macOS 26's Reminders.app AppleScript dictionary doesn't expose the parent relationship at all (no `parent reminder`, no `subtasks` collection). Would need a Shortcuts bridge or direct SQLite writes.
+**Out of scope on macOS 26 (Reminders.app dictionary doesn't expose them):**
+- Tag setting
+- Subtask creation (no `parent reminder` or `subtasks` collection)
 - Section assignment
-- Bulk operations
 - Recurring-rule editing
-- Tag rename (across every reminder using a label)
+
+**Out of scope by choice:**
+- Bulk operations (defer until concrete use cases appear)
+- Tag rename across every reminder using a label
 
 ## Architecture notes
 
